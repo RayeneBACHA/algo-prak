@@ -12,6 +12,26 @@ geom_ptr parse_geometry(char const* wkt) {
   return {tg_parse_wkt(wkt), &tg_geom_free};
 }
 
+walkable_area make_barrier_test_area() {
+  walkable_area area{};
+
+  area.rings_.emplace_back();
+  area.rings_.back().points_ = {
+      {49.000, 8.000},
+      {49.000, 8.010},
+      {49.010, 8.010},
+      {49.010, 8.000},
+      {49.000, 8.000}
+  };
+
+  area.barriers_.push_back({
+      geo::latlng{49.002, 8.005},
+      geo::latlng{49.008, 8.005}
+  });
+
+  return area;
+}
+
 }  // namespace
 
 TEST(visibility_geometry, line_inside_rectangle) {
@@ -299,5 +319,72 @@ TEST(visibility_geometry, invisible_through_building) {
 
   EXPECT_FALSE(is_visible(area, start, end));
 }
+
+TEST(visibility_geometry, invisible_through_barrier) {
+  auto area = walkable_area{};
+
+  area.rings_.emplace_back();
+  area.rings_.back().points_ = {
+    {49.000, 8.000},
+    {49.000, 8.010},
+    {49.010, 8.010},
+    {49.010, 8.000},
+    {49.000, 8.000}
+  };
+
+  area.barriers_.push_back({
+    geo::latlng{49.003, 8.005},
+    geo::latlng{49.007, 8.005}
+  });
+
+  auto const start = geo::latlng{49.005, 8.002};
+  auto const end = geo::latlng{49.005, 8.008};
+
+  EXPECT_FALSE(is_visible(area, start, end));
+
+}
+
+
+TEST(visibility_geometry, visible_at_building_corner) {
+  auto area = walkable_area{};
+
+  area.rings_.emplace_back();
+  area.rings_.back().points_ = {{49.000, 8.000},
+                                {49.000, 8.010},
+                                {49.010, 8.010},
+                                {49.010, 8.000},
+                                {49.000, 8.000}};
+
+  area.buildings_.push_back({{49.004, 8.004},
+                             {49.004, 8.006},
+                             {49.006, 8.006},
+                             {49.006, 8.004},
+                             {49.004, 8.004}});
+
+  auto const start = geo::latlng{49.002, 8.002};
+  auto const end = geo::latlng{49.004, 8.004};
+
+  EXPECT_TRUE(is_visible(area, start, end));
+}
+
+TEST(visibility_geometry, visible_at_barrier_endpoint) {
+  auto area = make_barrier_test_area();
+
+  auto const start = geo::latlng{49.002, 8.002};
+  auto const end = geo::latlng{49.002, 8.005};
+
+  EXPECT_TRUE(is_visible(area, start, end));
+
+}
+
+TEST(visibility_geometry, invisible_along_barrier) {
+  auto area = make_barrier_test_area();
+
+  auto const start = geo::latlng{49.003, 8.005};
+  auto const end = geo::latlng{49.005, 8.005};
+
+  EXPECT_FALSE(is_visible(area, start, end));
+}
+
 
 }  // namespace osr

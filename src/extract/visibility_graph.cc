@@ -116,7 +116,8 @@ bool intersects_building(
     return true;
   }
 
-  return tg_geom_intersects(segment, building_polygon.get());
+  return tg_geom_intersects(segment, building_polygon.get()) &&
+    !tg_geom_touches(segment, building_polygon.get());
   
 }
 // 6. Check whether a segment intersects a barrier.
@@ -131,7 +132,8 @@ bool intersects_barrier(
     return true;
   }
 
-  return tg_geom_intersects(segment, barrier_segment.get());
+  return tg_geom_intersects(segment, barrier_segment.get()) &&
+         !tg_geom_touches(segment, barrier_segment.get());
 
 }
 

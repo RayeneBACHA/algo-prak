@@ -1,11 +1,15 @@
 #include "osr/extract/visibility_graph.h"
+#include "osr/ways.h"
 
 #include <array>
 #include <memory>
 #include <span>
 #include <vector>
+#include <algorithm>
 
 #include "tg.h"
+
+#include <optional>
 
 namespace osr {
 namespace {
@@ -137,6 +141,56 @@ bool intersects_barrier(
 
 }
 
+struct visibility_vertex {
+  geo::latlng pos_;
+  std::optional<osm_node_idx_t> node_;
+};
+
+// Collects vertices...
+std::vector<visibility_vertex> collect_vertices(walkable_area const& area)
+{
+  auto vertices = std::vector<visibility_vertex>{};
+
+  // Existing connectors
+  for (auto const& connector : area.connectors_) {
+    vertices.push_back({connector.pos_, connector.node_});
+  }
+
+  auto add_corner = [&](geo::latlng const& pos) {
+    auto const exists = std::ranges::any_of(
+      vertices, [&](visibility_vertex const& v) { return v.pos_ == pos; }
+    );
+
+    if (!exists) {
+      vertices.push_back({pos, std::nullopt});
+    }
+
+  };
+
+  // Outer boundary and hole corners
+  for (auto const& ring : area.rings_) {
+    for (auto const& pos : ring.points_)
+    {
+      add_corner(pos);
+    }
+  }
+
+  for (auto const& building : area.buildings_) {
+    for (auto const& pos : building)
+    {
+      add_corner(pos);
+    }
+  }
+  for (auto const& barrier : area.barriers_) {
+    for (auto const& pos : barrier)
+    {
+      add_corner(pos);
+    }
+  }
+
+  return vertices;
+}
+
 }  // namespace
 
 // 7. Make the visibility decision.
@@ -171,5 +225,57 @@ bool is_visible(
     return true;
 }
 
+void build_visibility_graph(
+  walkable_area const& area,
+  virtual_ways& vw
+) {
+  if (area.connectors_.size() < 2U || area.rings_.empty()) {
+    return;
+  }
+
+  auto vertices = collect_vertices(area);
+
+  auto get_node = [&](visibility_vertex& vertex) -> osm_node_idx_t {
+    if (!vertex.node_)
+    {
+      vertex.node_ = vw.add_node(vertex.pos_);
+    }
+
+    return *vertex.node_;
+  };
+
+  // Check every unordered pair of vertices.
+  for (std::size_t i = 0; i < vertices.size(); ++i) {
+    for (std::size_t j = i + 1; j < vertices.size(); j++) {
+      auto& a = vertices[i];
+      auto& b = vertices[j];
+
+      // Avoid zero_length edges.
+      if (a.pos_ == b.pos_){
+        continue;
+      }
+
+      if (!is_visible(area, a.pos_, b.pos_)) {
+        continue;
+      }
+
+      std::array<osm_node_idx_t, 2> nodes = {
+        get_node(a),
+        get_node(b)
+      };
+
+      std::array<geo::latlng, 2> polyline = {
+        a.pos_,
+        b.pos_
+      };
+
+      vw.add_way(
+        virtual_ways::foot_way(kNoLevel),
+        nodes,
+        polyline
+      );
+    }
+  }
+}
 
 }  // namespace osr

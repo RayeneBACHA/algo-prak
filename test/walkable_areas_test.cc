@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <vector>
 
+#include "osr/extract/visibility_graph.h"
 #include "osr/extract/extract.h"
 #include "osr/extract/walkable_areas.h"
 #include "osr/lookup.h"
@@ -182,4 +183,74 @@ TEST(walkable_areas, no_hook_no_change) {
 
   auto const w = ways{dir, cista::mmap::protection::READ};
   EXPECT_FALSE(w.find_node_idx(to_osm_node_idx(33)).has_value());
+}
+
+
+TEST(walkable_areas, creates_connector_edge) {
+  auto const dir = fs::temp_directory_path() / "osr_visibility_graph_test";
+
+  auto const osm = osr::test::write_osm_pbf("osr_visibility_graph", kAreasOsm);
+
+  auto original_way_count = std::size_t{0};
+  auto hook_called = false;
+
+  extract(false, osm, dir, {},
+    [&](fs::path const&,
+      ways const& w,
+      std::vector<walkable_area> const& areas,
+      virtual_ways& vw) {
+
+        auto const area = std::ranges::find(
+          areas, 300, &walkable_area::osm_id_);
+
+          ASSERT_NE(areas.end(), area);
+          ASSERT_EQ(2U, area->connectors_.size());
+
+          original_way_count = w.n_ways();
+
+          build_visibility_graph(*area, vw);
+          hook_called = true;
+      }
+  );
+
+  ASSERT_TRUE(hook_called);
+
+  // Reopen the extracted OSR routing data.
+  auto const w = ways{dir, cista::mmap::protection::READ};
+
+  // Graph generation must have added new ways.
+  ASSERT_GT(w.n_ways(), original_way_count);
+
+  auto const connector_a = to_osm_node_idx(19);
+  auto const connector_b = to_osm_node_idx(33);
+
+  auto found_edge = false;
+
+  // Examine only ways created by our new algorithm.
+  for (auto i = original_way_count; i < w.n_ways(); ++i) {
+    auto const way = way_idx_t{static_cast<std::uint32_t>(i)};
+    auto const nodes = w.way_osm_nodes_[way];
+
+    if (nodes.size() != 2U) {
+      continue;
+    }
+
+    auto const connects_both = 
+      (nodes[0] == connector_a && nodes[1] == connector_b) ||
+      (nodes[0] == connector_b && nodes[1] == connector_a);
+    
+    if (connects_both) {
+      found_edge = true;
+
+      EXPECT_TRUE(w.r_->way_properties_[way].is_foot_accessible());
+
+      break;
+    }
+  }
+
+  EXPECT_TRUE(found_edge);
+
+  // The existing OSM connector IDs must remain in the graph.
+  EXPECT_TRUE(w.find_node_idx(connector_a).has_value());
+  EXPECT_TRUE(w.find_node_idx(connector_b).has_value());
 }

@@ -95,6 +95,51 @@ constexpr auto const kAreasOsm = R"osm(<osm version="0.6" generator="test">
   </relation>
 </osm>)osm";
 
+
+constexpr auto kRoutingOsm = R"osm(<osm version="0.6" generator="test">
+  <node id="1" lat="49.0000" lon="8.0000"/>
+  <node id="2" lat="49.0010" lon="8.0000"/>
+  <node id="3" lat="49.0010" lon="8.0010"/>
+  <node id="4" lat="49.0000" lon="8.0010"/>
+
+  <node id="5" lat="49.0004" lon="8.0004"/>
+  <node id="6" lat="49.0006" lon="8.0004"/>
+  <node id="7" lat="49.0006" lon="8.0006"/>
+  <node id="8" lat="49.0004" lon="8.0006"/>
+
+  <node id="9" lat="49.0005" lon="7.9995"/>
+  <node id="10" lat="49.0005" lon="8.0000"/>
+  <node id="11" lat="49.0005" lon="8.0010"/>
+  <node id="12" lat="49.0005" lon="8.0015"/>
+
+  <way id="100">
+    <nd ref="1"/><nd ref="10"/><nd ref="2"/>
+    <nd ref="3"/><nd ref="11"/><nd ref="4"/><nd ref="1"/>
+  </way>
+
+  <way id="101">
+    <nd ref="5"/><nd ref="6"/><nd ref="7"/>
+    <nd ref="8"/><nd ref="5"/>
+  </way>
+
+  <way id="200">
+    <nd ref="9"/><nd ref="10"/>
+    <tag k="highway" v="footway"/>
+  </way>
+
+  <way id="201">
+    <nd ref="11"/><nd ref="12"/>
+    <tag k="highway" v="footway"/>
+  </way>
+
+  <relation id="300">
+    <member type="way" ref="100" role="outer"/>
+    <member type="way" ref="101" role="inner"/>
+    <tag k="type" v="multipolygon"/>
+    <tag k="highway" v="pedestrian"/>
+  </relation>
+</osm>)osm";
+
 }  // namespace
 
 TEST(walkable_areas, extract_hook) {
@@ -253,4 +298,53 @@ TEST(walkable_areas, creates_connector_edge) {
   // The existing OSM connector IDs must remain in the graph.
   EXPECT_TRUE(w.find_node_idx(connector_a).has_value());
   EXPECT_TRUE(w.find_node_idx(connector_b).has_value());
+}
+
+
+TEST(walkable_areas, routes_around_hole) {
+  auto const dir = fs::temp_directory_path() / "osr_visibility_route_test";
+
+  auto const osm = osr::test::write_osm_pbf("osr_visibility_route", kRoutingOsm);
+
+  auto hook_called = false;
+
+  extract(false, osm, dir, {},
+    [&](fs::path const&,
+        ways const&,
+        std::vector<walkable_area> const& areas,
+        virtual_ways& vw) {
+          auto const area = std::ranges::find(
+            areas, 300, &walkable_area::osm_id_);
+
+            ASSERT_NE(areas.end(), area);
+            ASSERT_EQ(2U, area->connectors_.size());
+            ASSERT_EQ(2U, area->rings_.size());
+
+            build_visibility_graph(*area, vw);
+            hook_called = true;
+        }
+  );
+
+  ASSERT_TRUE(hook_called);
+
+  auto const w = ways{dir, cista::mmap::protection::READ};
+  auto const l = lookup{w, dir, cista::mmap::protection::READ};
+
+  auto const start = geo::latlng{49.0005, 7.9995};
+  auto const end = geo::latlng{49.0005, 8.0015};
+
+  auto const result = route(
+    foot<false, elevator_tracking>::parameters{},
+    w, l, search_profile::kFoot,
+    location{start, kNoLevel},
+    location{end, kNoLevel},
+    std::chrono::seconds{3600},
+    direction::kForward,
+    10.0
+  );
+
+  ASSERT_TRUE(result.has_value());
+
+  // Walking around the hole must be longer than a straight line.
+  EXPECT_GT(result->dist_, geo::distance(start, end));
 }

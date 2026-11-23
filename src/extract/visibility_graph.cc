@@ -236,8 +236,7 @@ void build_visibility_graph(
   auto vertices = collect_vertices(area);
 
   auto get_node = [&](visibility_vertex& vertex) -> osm_node_idx_t {
-    if (!vertex.node_)
-    {
+    if (!vertex.node_) {
       vertex.node_ = vw.add_node(vertex.pos_);
     }
 

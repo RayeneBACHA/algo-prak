@@ -1,4 +1,5 @@
 #include "osr/extract/visibility_graph.h"
+#include "osr/extract/detail/visibility_geometry.h"
 #include <memory>
 #include "gtest/gtest.h"
 #include "tg.h"
@@ -6,6 +7,7 @@
 namespace osr {
 
 namespace {
+
 using geom_ptr = std::unique_ptr<tg_geom, decltype(&tg_geom_free)>;
 
 geom_ptr parse_geometry(char const* wkt) {
@@ -31,6 +33,19 @@ walkable_area make_barrier_test_area() {
 
   return area;
 }
+
+// Test-only helper. Not part of the public OSR API.
+bool is_visible(
+  walkable_area const& area,
+  geo::latlng const& start,
+  geo::latlng const& end) {
+
+    auto const geometry = detail::visibility_geometry{area};
+
+    return detail::is_visible_cached(
+      geometry, start, end
+    );
+  } 
 
 }  // namespace
 

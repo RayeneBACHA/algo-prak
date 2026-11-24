@@ -1,4 +1,5 @@
 #include "osr/extract/visibility_graph.h"
+#include "osr/extract/detail/visibility_geometry.h"
 #include "osr/ways.h"
 
 #include <array>
@@ -46,6 +47,7 @@ geom_ptr make_polygon(
 
   std::vector<ring_ptr> holes;
   std::vector<tg_ring const*> hole_ptrs;
+
   holes.reserve(hole_rings.size());
   hole_ptrs.reserve(hole_rings.size());
 
@@ -53,7 +55,7 @@ geom_ptr make_polygon(
     holes.push_back(make_ring(hole.points_));
 
     if (!holes.back()) {
-      return {nullptr,&tg_geom_free};
+      return {nullptr, &tg_geom_free};
     }
 
     hole_ptrs.push_back(holes.back().get());
@@ -107,48 +109,15 @@ geom_ptr make_segment(
   return {tg_geom_new_linestring(segment.get()), &tg_geom_free};
 }
 
-// 5. Check whether a segment intersects a building.
-bool intersects_building(
-  tg_geom const* segment,
-  std::vector<geo::latlng> const& building
-) {
-  
-  geom_ptr building_polygon = make_polygon(building);
-
-  if (!building_polygon)
-  {
-    return true;
-  }
-
-  return tg_geom_intersects(segment, building_polygon.get()) &&
-    !tg_geom_touches(segment, building_polygon.get());
-  
-}
-// 6. Check whether a segment intersects a barrier.
-bool intersects_barrier(
-  tg_geom const* segment,
-  std::array<geo::latlng, 2> const& barrier
-) {
-  
-  geom_ptr barrier_segment = make_segment(barrier[0], barrier[1]);
-
-  if (!barrier_segment) {
-    return true;
-  }
-
-  return tg_geom_intersects(segment, barrier_segment.get()) &&
-         !tg_geom_touches(segment, barrier_segment.get());
-
-}
-
 struct visibility_vertex {
   geo::latlng pos_;
   std::optional<osm_node_idx_t> node_;
 };
 
-// Collects vertices...
-std::vector<visibility_vertex> collect_vertices(walkable_area const& area)
-{
+// Collect connector nodes and polygon/obstacle corners.
+std::vector<visibility_vertex> collect_vertices(
+  walkable_area const& area) {
+    
   auto vertices = std::vector<visibility_vertex>{};
 
   // Existing connectors
@@ -191,33 +160,76 @@ std::vector<visibility_vertex> collect_vertices(walkable_area const& area)
   return vertices;
 }
 
-}  // namespace
+} // namespace
 
-// 7. Make the visibility decision.
-bool is_visible(
-  walkable_area const& area,
-  geo::latlng const& start,
-  geo::latlng const& end) {
-    
-    auto walkable_polygon = make_area_polygon(area);
-    auto segment = make_segment(start, end);
+namespace detail {
 
-    if (!walkable_polygon || !segment) {
-      return false;
+// Construct and cahe TG geometry once.
+visibility_geometry::visibility_geometry(
+  walkable_area const& area)
+  : polygon_(make_area_polygon(area)) {
+
+    if (!polygon_) {
+      return;
     }
 
-    if (!tg_geom_covers(walkable_polygon.get(), segment.get())) {
-      return false;
-    }
+    buildings_.reserve(area.buildings_.size());
 
     for (auto const& building : area.buildings_) {
-      if (intersects_building(segment.get(), building)) {
+      buildings_.push_back(make_polygon(building));
+
+      if (!buildings_.back()) {
+        return;
+      }
+    }
+
+    barriers_.reserve(area.barriers_.size());
+
+    for (auto const& barrier : area.barriers_) {
+      barriers_.push_back(make_segment(barrier[0], barrier[1]));
+
+      if (!barriers_.back()) {
+        return;
+      }
+    }
+
+    valid_ = true;
+};
+
+// Check visibility using the cached geometries.
+bool is_visible_cached(
+  visibility_geometry const& geometry,
+  geo::latlng const& start,
+  geo::latlng const& end) {
+
+    if(!geometry.valid_) {
+      return false;
+    }
+    
+    // Only the candidate segment is constructed.
+    auto const segment = make_segment(start, end);
+
+    if (!segment) {
+      return false;
+    }
+
+    // Reuse the same area polygon
+    if (!tg_geom_covers(geometry.polygon_.get(), segment.get())) {
+      return false;
+    }
+
+      // Reuse building polygons.
+    for (auto const& building : geometry.buildings_) {
+      if (tg_geom_intersects(segment.get(), building.get()) && 
+         !tg_geom_touches(segment.get(), building.get())) {
         return false;
       }
     }
 
-    for (auto const& barrier : area.barriers_) {
-      if (intersects_barrier(segment.get(), barrier)) {
+    // Reuse barrier segments.
+    for (auto const& barrier : geometry.barriers_) {
+      if (tg_geom_intersects(segment.get(), barrier.get()) && 
+         !tg_geom_touches(segment.get(), barrier.get())) {
         return false;
       }
     }
@@ -225,16 +237,27 @@ bool is_visible(
     return true;
 }
 
+}  // namespace detail
+
+// Generate visibility edges in the OSR routing graph.
 void build_visibility_graph(
   walkable_area const& area,
-  virtual_ways& vw
-) {
+  virtual_ways& vw) {
+
   if (area.connectors_.size() < 2U || area.rings_.empty()) {
+    return;
+  }
+
+    // Construct geometry once for the entire area.
+  auto geometry = detail::visibility_geometry{area};
+
+  if (!geometry.valid_) {
     return;
   }
 
   auto vertices = collect_vertices(area);
 
+    // Reuse original connector IDs and create corner nodes as needed.
   auto get_node = [&](visibility_vertex& vertex) -> osm_node_idx_t {
     if (!vertex.node_) {
       vertex.node_ = vw.add_node(vertex.pos_);
@@ -254,7 +277,8 @@ void build_visibility_graph(
         continue;
       }
 
-      if (!is_visible(area, a.pos_, b.pos_)) {
+      // Reuse cached geometry.
+      if (!detail::is_visible_cached(geometry, a.pos_, b.pos_)) {
         continue;
       }
 

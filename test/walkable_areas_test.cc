@@ -349,62 +349,90 @@ TEST(walkable_areas, routes_around_hole) {
   EXPECT_GT(result->dist_, geo::distance(start, end));
 }
 
+
 TEST(walkable_areas, DISABLED_benchmark_visibility_graph) {
-  auto const dir = fs::temp_directory_path() / "osr_visibility_benchmark";
+  auto const dir =
+      fs::temp_directory_path() / "osr_visibility_benchmark";
 
-  auto const osm = 
-    osr::test::write_osm_pbf("osr_visibility_benchmark", kRoutingOsm);
+  auto const osm = osr::test::write_osm_pbf(
+      "osr_visibility_benchmark", kRoutingOsm);
 
-  std::vector<double> timings;
+  for (int grid : {0, 2, 4, 8}) {
+    std::vector<double> timings;
 
-  for (int run = 0; run < 10; ++run) {
-    extract(false, osm, dir, {},
-        [&](fs::path const&,
-            ways const& w,
-            std::vector<walkable_area> const& areas,
-            virtual_ways& vw) {
+    std::cout << "\nBuildings added: "
+              << grid * grid << '\n';
 
-          auto const area = std::ranges::find(
-              areas, 300, &walkable_area::osm_id_);
+    for (int run = 0; run < 5; ++run) {
+      extract(false, osm, dir, {},
+          [&](fs::path const&,
+              ways const& w,
+              std::vector<walkable_area> const& areas,
+              virtual_ways& vw) {
 
-          ASSERT_NE(areas.end(), area);
+            auto const it = std::ranges::find(
+                areas, 300, &walkable_area::osm_id_);
 
-          auto const ways_before = w.n_ways();
+            ASSERT_NE(areas.end(), it);
 
-          // Start measurement.
-          auto const start = std::chrono::steady_clock::now();
+            auto area = *it;
 
-          build_visibility_graph(*area, vw);
+            // Generate buildings in the left part of the area.
+            for (int i = 0; i < grid; ++i) {
+              for (int j = 0; j < grid; ++j) {
+                auto const dx = 0.0003 / grid;
+                auto const dy = 0.0009 / grid;
 
-          // Stop measurement.
-          auto const end = std::chrono::steady_clock::now();
+                auto const lng = 8.00005 + j * dx;
+                auto const lat = 49.00005 + i * dy;
 
-          auto const duration = 
-            std::chrono::duration<double, std::micro>(
-              end - start).count();
-            
-          timings.push_back(duration);
+                auto const width = dx * 0.4;
+                auto const height = dy * 0.4;
 
-          auto const generated_ways = 
-              w.n_ways() - ways_before;
+                area.buildings_.push_back({
+                    {lat, lng},
+                    {lat, lng + width},
+                    {lat + height, lng + width},
+                    {lat + height, lng},
+                    {lat, lng}
+                });
+              }
+            }
 
-          EXPECT_GT(generated_ways, 0U);
+            auto const ways_before = w.n_ways();
 
-          std::cout << "Run " << run + 1
-                    << ": " << duration << " us"
-                    << " | Generated ways: "
-                    << generated_ways << '\n';
-  });
-}
+            auto const start =
+                std::chrono::steady_clock::now();
 
-  ASSERT_EQ(timings.size(), 10U);
+            build_visibility_graph(area, vw);
 
-  std::ranges::sort(timings);
+            auto const end =
+                std::chrono::steady_clock::now();
 
-  auto const median = (timings[4] + timings[5]) / 2.0;
+            auto const duration =
+                std::chrono::duration<double, std::milli>(
+                    end - start).count();
 
-  std::cout << "\nBenchmark results\n"
-            << "Minimum: " << timings.front() << " us\n"
-            << "Maximum: " << timings.back() << " us\n"
-            << "Median:  " << median << " us\n";
+            timings.push_back(duration);
+
+            auto const generated_ways =
+                w.n_ways() - ways_before;
+
+            EXPECT_GT(generated_ways, 0U);
+
+            std::cout << "Run " << run + 1
+                      << ": " << duration << " ms"
+                      << " | Edges: "
+                      << generated_ways << '\n';
+          });
+    }
+
+    ASSERT_EQ(5U, timings.size());
+
+    std::ranges::sort(timings);
+
+    std::cout << "Minimum: " << timings.front() << " ms\n"
+              << "Maximum: " << timings.back() << " ms\n"
+              << "Median:  " << timings[2] << " ms\n";
+  }
 }

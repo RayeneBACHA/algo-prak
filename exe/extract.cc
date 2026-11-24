@@ -1,4 +1,5 @@
 #include <iostream>
+#include <string>
 
 #include "fmt/core.h"
 #include "fmt/std.h"
@@ -8,6 +9,7 @@
 #include "utl/progress_tracker.h"
 
 #include "osr/extract/extract.h"
+#include "osr/extract/visibility_graph.h"
 
 using namespace osr;
 using namespace boost::program_options;
@@ -20,10 +22,13 @@ struct config : public conf::configuration {
     param(out_, "out,o", "output directory");
     param(elevation_data_, "elevation_data,e", "directory with elevation data");
     param(with_platforms_, "with_platforms,p", "extract platform info");
+    param(area_routing_, "area-routing",
+       "area routing algorithm: none or visibility");
   }
 
   std::filesystem::path in_, out_, elevation_data_;
   bool with_platforms_{false};
+  std::string area_routing_{"none"};
 };
 
 int main(int ac, char const** av) {
@@ -45,5 +50,20 @@ int main(int ac, char const** av) {
   utl::activate_progress_tracker("osr");
   auto const silencer = utl::global_progress_bars{false};
 
-  extract(c.with_platforms_, c.in_, c.out_, c.elevation_data_);
+  walkable_areas_hook hook{};
+
+  if (c.area_routing_ == "visibility") {
+    hook = [](auto const&, auto const&,
+      auto const& areas, virtual_ways& vw) {
+        for (auto const& area : areas) {
+          build_visibility_graph(area, vw);
+        }
+      };
+  } else if (c.area_routing_ != "none") {
+    std::cout << "Unknown area routing algorithm : {}"
+              << c.area_routing_;
+    return 1;
+  }
+
+  extract(c.with_platforms_, c.in_, c.out_, c.elevation_data_, hook);
 }

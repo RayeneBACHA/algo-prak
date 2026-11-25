@@ -329,6 +329,10 @@ void walkable_area_collector::find_connectors() {
   auto mutex = std::mutex{};
   utl::parallel_for_run(i.w_.n_ways(), [&](std::size_t const x) {
     auto const way = way_idx_t{x};
+    // Now only pedestrian-accessible ways can provide connectors.
+    if (!i.w_.r_->way_properties_[way].is_foot_accessible()) {
+      return;
+    }
     auto const nodes = i.w_.way_osm_nodes_[way];
     auto const polyline = i.w_.way_polylines_[way];
     auto const& levels = i.way_levels_[x];
@@ -362,8 +366,8 @@ void walkable_area_collector::find_connectors() {
       return std::ranges::find(outline_of, f.first) != end(outline_of);
     });
 
-    // Ends inside an area: stairs, lifts, footway stubs.
-    for (auto const e : {std::size_t{0U}, nodes.size() - 1U}) {
+    // Check all way nodes inside an area.
+    for (std::size_t e = 0; e < nodes.size(); ++e) {
       auto const n = nodes[e];
       auto const pos = polyline[e].as_latlng();
       i.for_each_area_at(pos, [&](std::uint32_t const a) {

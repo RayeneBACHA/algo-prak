@@ -436,3 +436,74 @@ TEST(walkable_areas, DISABLED_benchmark_visibility_graph) {
               << "Median:  " << timings[2] << " ms\n";
   }
 }
+
+TEST(walkable_areas, detects_only_pedestrian_connectors) {
+  auto const dir =
+      fs::temp_directory_path() / "osr_connector_filter";
+
+  auto const osm = osr::test::write_osm_pbf(
+      "osr_connector_filter", R"(
+<osm version="0.6" generator="test">
+  <node id="1" lat="49.0000" lon="8.0000"/>
+  <node id="2" lat="49.0000" lon="8.0010"/>
+  <node id="3" lat="49.0010" lon="8.0010"/>
+  <node id="4" lat="49.0010" lon="8.0000"/>
+
+  <node id="5" lat="49.0005" lon="7.9995"/>
+  <node id="6" lat="49.0005" lon="8.0003"/>
+  <node id="7" lat="49.0005" lon="8.0007"/>
+  <node id="8" lat="49.0005" lon="8.0015"/>
+
+  <node id="9" lat="49.0008" lon="7.9995"/>
+  <node id="10" lat="49.0008" lon="8.0005"/>
+  <node id="11" lat="49.0008" lon="8.0015"/>
+
+  <way id="100">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <nd ref="4"/>
+    <nd ref="1"/>
+    <tag k="highway" v="pedestrian"/>
+    <tag k="area" v="yes"/>
+  </way>
+
+  <way id="200">
+    <nd ref="5"/>
+    <nd ref="6"/>
+    <nd ref="7"/>
+    <nd ref="8"/>
+    <tag k="highway" v="footway"/>
+  </way>
+
+  <way id="201">
+    <nd ref="9"/>
+    <nd ref="10"/>
+    <nd ref="11"/>
+    <tag k="highway" v="primary"/>
+    <tag k="foot" v="no"/>
+  </way>
+</osm>
+)");
+
+  bool checked = false;
+
+  extract(false, osm, dir, {},
+      [&](fs::path const&,
+        ways const&,
+        std::vector<walkable_area> const& areas,
+        virtual_ways&) {
+          auto const area = std::ranges::find(
+            areas, 100, &walkable_area::osm_id_);
+
+          ASSERT_NE(area, areas.end());
+          ASSERT_EQ(2U, area->connectors_.size());
+
+          EXPECT_EQ(to_osm_node_idx(6), area->connectors_[0].node_);
+          EXPECT_EQ(to_osm_node_idx(7), area->connectors_[1].node_);
+
+          checked = true;
+        });
+
+  EXPECT_TRUE(checked);
+}

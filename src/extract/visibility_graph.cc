@@ -12,6 +12,8 @@
 
 #include <optional>
 
+#include <bit>
+
 namespace osr {
 namespace {
 
@@ -248,19 +250,32 @@ void build_visibility_graph(
     return;
   }
 
-    // Construct geometry once for the entire area.
+  // Construct geometry once for the entire area.
   auto geometry = detail::visibility_geometry{area};
 
   if (!geometry.valid_) {
     return;
   }
 
+  auto level = kNoLevel;
+  if (!area.levels_.any_) {
+    if (!std::has_single_bit(area.levels_.bits_)) {
+      return;
+    }
+
+    level = level_t{
+      static_cast<std::uint8_t>(
+        std::countr_zero(area.levels_.bits_))
+    };
+
+  }
+
   auto vertices = collect_vertices(area);
 
-    // Reuse original connector IDs and create corner nodes as needed.
+  // Reuse original connector IDs and create corner nodes as needed.
   auto get_node = [&](visibility_vertex& vertex) -> osm_node_idx_t {
     if (!vertex.node_) {
-      vertex.node_ = vw.add_node(vertex.pos_);
+      vertex.node_ = vw.add_node(vertex.pos_, level);
     }
 
     return *vertex.node_;
@@ -293,7 +308,7 @@ void build_visibility_graph(
       };
 
       vw.add_way(
-        virtual_ways::foot_way(kNoLevel),
+        virtual_ways::foot_way(level),
         nodes,
         polyline
       );

@@ -27,6 +27,8 @@
 #include "osr/util/levels.h"
 #include "osr/ways.h"
 
+#include <bit>
+
 namespace osr {
 
 namespace {
@@ -322,6 +324,29 @@ void walkable_area_collector::find_connectors() {
   utl::verify(i.way_levels_.size() == i.w_.n_ways(),
               "walkable areas: levels of {} ways, but {} ways",
               i.way_levels_.size(), i.w_.n_ways());
+  // To separate graphs by levels...
+  // We do this before connector and obstacle detection so each floor can receive its own connectors and obstacles.
+  auto areas = std::vector<walkable_area>{};
+
+  for (auto& area : i.areas_) {
+    if (area.levels_.any_ ||
+        std::has_single_bit(area.levels_.bits_)) {
+      areas.push_back(std::move(area));
+      continue;
+    }
+
+    for (auto b = 0U; b < 64U; ++b) {
+      auto const bit = level_bits_t{1U} << b;
+
+      if ((area.levels_.bits_ & bit) != 0U) {
+        auto copy = area;
+        copy.levels_.bits_ = bit;
+        areas.push_back(std::move(copy));
+      }
+    }
+  }
+
+  i.areas_ = std::move(areas);
 
   i.build_index();
   i.connectors_.resize(i.areas_.size());

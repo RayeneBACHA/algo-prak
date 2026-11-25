@@ -507,3 +507,106 @@ TEST(walkable_areas, detects_only_pedestrian_connectors) {
 
   EXPECT_TRUE(checked);
 }
+
+
+TEST(walkable_areas, separates_area_levels) {
+  auto const dir =
+      fs::temp_directory_path() / "osr_area_levels";
+
+  auto const osm = osr::test::write_osm_pbf(
+      "osr_area_levels", R"(
+<osm version="0.6" generator="test">
+  <node id="1" lat="49.0000" lon="8.0000"/>
+  <node id="2" lat="49.0000" lon="8.0010"/>
+  <node id="3" lat="49.0010" lon="8.0010"/>
+  <node id="4" lat="49.0010" lon="8.0000"/>
+
+  <node id="5" lat="49.0002" lon="8.0002"/>
+  <node id="6" lat="49.0002" lon="8.0008"/>
+
+  <node id="7" lat="49.0008" lon="8.0002"/>
+  <node id="8" lat="49.0008" lon="8.0008"/>
+
+  <way id="100">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <nd ref="4"/>
+    <nd ref="1"/>
+    <tag k="highway" v="pedestrian"/>
+    <tag k="area" v="yes"/>
+    <tag k="level" v="0;1"/>
+  </way>
+
+  <way id="200">
+    <nd ref="5"/>
+    <nd ref="6"/>
+    <tag k="highway" v="footway"/>
+    <tag k="level" v="0"/>
+  </way>
+
+  <way id="201">
+    <nd ref="7"/>
+    <nd ref="8"/>
+    <tag k="highway" v="footway"/>
+    <tag k="level" v="1"/>
+  </way>
+</osm>
+)");
+
+bool checked = false;
+
+extract(false, osm, dir, {},
+    [&](fs::path const&,
+          ways const& w,
+          std::vector<walkable_area> const& areas,
+          virtual_ways& vw) {
+            ASSERT_EQ(2U, areas.size());
+
+            for (int floor : {0, 1}) {
+              auto const level =
+                level_t{static_cast<float>(floor)};
+
+              auto const bits =
+                level_bits_t{1U} << to_idx(level);
+
+              auto const area = std::ranges::find_if(
+                areas, [&](auto const& a) {
+                  return a.levels_.bits_ == bits;
+                }
+              );
+
+              ASSERT_NE(areas.end(), area);
+              ASSERT_EQ(2U, area->connectors_.size());
+
+              EXPECT_EQ(to_osm_node_idx(5 + floor * 2),
+                        area->connectors_[0].node_);
+              EXPECT_EQ(to_osm_node_idx(6 + floor * 2),
+                        area->connectors_[1].node_);
+
+              auto const ways_before = w.n_ways();
+              auto const nodes_before = vw.nodes_.size();
+
+              build_visibility_graph(*area, vw);
+
+              ASSERT_GT(w.n_ways(), ways_before);
+              ASSERT_GT(vw.nodes_.size(), nodes_before);
+
+              for (auto j = ways_before; j < w.n_ways(); ++j) {
+                auto const& p = w.r_->way_properties_[way_idx_t{j}];
+
+                EXPECT_EQ(to_idx(level), static_cast<unsigned>(p.from_level_));
+
+                EXPECT_EQ(to_idx(level), static_cast<unsigned>(p.to_level_));
+              }
+
+              for(auto j = nodes_before; j < vw.nodes_.size(); ++j) {
+                EXPECT_EQ(level, vw.nodes_[j].level_);
+              }
+            }
+
+            checked = true;
+          });
+
+EXPECT_TRUE(checked);
+}
